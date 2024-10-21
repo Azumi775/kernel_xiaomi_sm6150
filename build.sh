@@ -1,82 +1,100 @@
-#!/bin/sh
-#
-# Compile script for kernel
-#
+#!/bin/bash
 
-SECONDS=0 # builtin bash timer
+#set -e
 
-ZIPNAME="-perf-sweet-ksu-$(date '+%Y%m%d-%H%M').zip"
-
-if [ ! -d "toolchain" ]; then
-    git clone --depth=1 https://gitlab.com/PixelOS-Devices/playgroundtc -b 17 toolchain
-fi
-
+KERNEL_DEFCONFIG=sweet_defconfig 
+ANYKERNEL3_DIR=$PWD/AnyKernel3/ 
+FINAL_KERNEL_ZIP=Perf-sweet-Kernel-$(date '+%Y%m%d').zip 
+export PATH="$PWD/toolchain/bin:$PATH"
 export ARCH=arm64
 export SUBARCH=arm64
-export KBUILD_BUILD_USER=Builder
-export KBUILD_BUILD_HOST=DenomSly
-export PATH="$(pwd)/toolchain/bin/:$PATH"
-export KBUILD_COMPILER_STRING="$(pwd)/toolchain/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
+export KBUILD_COMPILER_STRING="$($PWD/toolchain/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
 
-if [[ $1 = "-c" || $1 = "--clean" ]]; then
-	rm -rf out
-	echo "Cleaned output folder"
+git clone --depth=1 -b master https://github.com/basamaryan/AnyKernel3 
+
+if ! [ -d "$PWD/toolchain" ]; then
+echo "clang not found! Cloning..."
+if ! git clone -q https://gitlab.com/PixelOS-Devices/playgroundtc.git --depth=1 -b 17 ~/toolchain; then 
+echo "Cloning failed! Aborting..."
+exit 1
+fi
 fi
 
-make O=out ARCH=arm64 sweet_defconfig
-make -j$(nproc --all) \
-    O=out \
-    ARCH=arm64 \
-    AR=llvm-ar \
-    NM=llvm-nm \
-	LD=ld.lld \
-    OBJCOPY=llvm-objcopy \
-    OBJDUMP=llvm-objdump \
-    STRIP=llvm-strip \
-    LLVM=1 \
-    LLVM_IAS=1 \
-    CC=clang \
-    CROSS_COMPILE=aarch64-linux-gnu- \
-    CROSS_COMPILE_ARM32=arm-linux-gnueabi- 2>&1 | tee log-build.txt
-    
-kernel="out/arch/arm64/boot/Image.gz"
-dtbo="out/arch/arm64/boot/dtbo.img"
-dtb="out/arch/arm64/boot/dtb.img"
+# Speed up build process
+MAKE="./makeparallel"
 
-if [ ! -f "$kernel" ] || [ ! -f "$dtbo" ] || [ ! -f "$dtb" ]; then
-	echo -e "\nCompilation failed!"
-	exit 1
-fi
+BUILD_START=$(date +"%s")
+blue='\033[0;34m'
+cyan='\033[0;36m'
+yellow='\033[0;33m'
+red='\033[0;31m'
+nocol='\033[0m'
 
-echo -e "\nKernel compiled successfully! Zipping up...\n"
+# Clean build always lol
+echo "**** Cleaning ****"
+mkdir -p out
+make O=out clean
 
-if [ -d "$AK3_DIR" ]; then
-	cp -r $AK3_DIR AnyKernel3
-else
-	if ! git clone -q https://github.com/basamaryan/AnyKernel3 -b master AnyKernel3; then
-		echo -e "\nAnyKernel3 repo not found locally and couldn't clone from GitHub! Aborting..."
-		exit 1
-	fi
-fi
+echo "**** Kernel defconfig is set to $KERNEL_DEFCONFIG ****"
+echo -e "$blue***********************************************"
+echo "          BUILDING KERNEL          "
+echo -e "***********************************************$nocol"
+make $KERNEL_DEFCONFIG O=out
+make -j$(nproc --all) O=out \
+                              ARCH=arm64 \
+                              LLVM=1 \
+                              LLVM_IAS=1 \
+                              AR=llvm-ar \
+                              NM=llvm-nm \
+                              LD=ld.lld \
+                              OBJCOPY=llvm-objcopy \
+                              OBJDUMP=llvm-objdump \
+                              STRIP=llvm-strip \
+                              CC=clang \
+                              CROSS_COMPILE=aarch64-linux-gnu- \
+                              CROSS_COMPILE_ARM32=arm-linux-gnueabi
 
-# Modify anykernel.sh to replace device names
-sed -i "s/device\.name1=.*/device.name1=sweet/" AnyKernel3/anykernel.sh
-sed -i "s/device\.name2=.*/device.name2=sweetin/" AnyKernel3/anykernel.sh
+echo "**** Verify Image.gz-dtb & dtbo.img ****"
+ls $PWD/out/arch/arm64/boot/Image.gz-dtb
+ls $PWD/out/arch/arm64/boot/dtbo.img
+ls $PWD/out/arch/arm64/boot/dtb.img
 
-cp $kernel AnyKernel3
-cp $dtbo AnyKernel3
-cp $dtb AnyKernel3
-cd AnyKernel3
-zip -r9 "../$ZIPNAME" * -x .git
+# Anykernel 3 time!!
+echo "**** Verifying AnyKernel3 Directory ****"
+ls $ANYKERNEL3_DIR
+echo "**** Removing leftovers ****"
+rm -rf $ANYKERNEL3_DIR/Image.gz-dtb
+rm -rf $ANYKERNEL3_DIR/dtbo.img
+rm -rf $ANYKERNEL3_DIR/dtb.img
+rm -rf $ANYKERNEL3_DIR/$FINAL_KERNEL_ZIP
+
+echo "**** Copying Image.gz-dtb & dtbo.img ****"
+cp $PWD/out/arch/arm64/boot/Image.gz-dtb $ANYKERNEL3_DIR/
+cp $PWD/out/arch/arm64/boot/dtbo.img $ANYKERNEL3_DIR/
+cp $PWD/out/arch/arm64/boot/dtb.img $ANYKERNEL3_DIR/
+
+echo "**** Time to zip up! ****"
+cd $ANYKERNEL3_DIR/
+zip -r9 "../$FINAL_KERNEL_ZIP" * -x README $FINAL_KERNEL_ZIP
+
+echo "**** Done, here is your sha1 ****"
 cd ..
-rm -rf AnyKernel3
-echo -e "\nCompleted in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) !"
-echo "Zip: $ZIPNAME"
+rm -rf $ANYKERNEL3_DIR/$FINAL_KERNEL_ZIP
+rm -rf $ANYKERNEL3_DIR/Image.gz-dtb
+rm -rf $ANYKERNEL3_DIR/dtbo.img
+rm -rf $ANYKERNEL3_DIR/dtb.img
+rm -rf out/
 
-if test -z "$(git rev-parse --show-cdup 2>/dev/null)" &&
-   head=$(git rev-parse --verify HEAD 2>/dev/null); then
-	HASH="$(echo $head | cut -c1-8)"
+sha1sum $FINAL_KERNEL_ZIP
+
+BUILD_END=$(date +"%s")
+DIFF=$(($BUILD_END - $BUILD_START))
+echo -e "$yellow Build completed in $(($DIFF / 60)) minute(s) and $(($DIFF % 60)) seconds.$nocol"
+
+echo "**** Uploading your zip now ****"
+if command -v curl &> /dev/null; then
+curl -T $FINAL_KERNEL_ZIP temp.sh
+else
+echo "Zip: $FINAL_KERNEL_ZIP"
 fi
-
-
 
