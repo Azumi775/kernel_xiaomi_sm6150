@@ -1,44 +1,44 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Compile script for kernel
 #
 
 SECONDS=0 # builtin bash timer
 
-# Allowed codenames
-ALLOWED_CODENAMES=("sweet" "courbet" "tucana" "toco" "phoenix" "davinci")
+ZIPNAME="-perf-sweet-ksu-$(date '+%Y%m%d-%H%M').zip"
 
-# Prompt user for device codename
-read -p "Enter device codename: " DEVICE
-
-# Check if the entered codename is in the allowed list
-if [[ ! " ${ALLOWED_CODENAMES[@]} " =~ " ${DEVICE} " ]]; then
-    echo "Error: Invalid codename. Allowed codenames are: ${ALLOWED_CODENAMES[*]}"
-    exit 1
+if [ ! -d "toolchain" ]; then
+    git clone --depth=1 https://gitlab.com/PixelOS-Devices/playgroundtc -b 17 toolchain
 fi
 
-ZIPNAME="${DEVICE}-$(date '+%Y%m%d-%H%M').zip"
-
 export ARCH=arm64
-export KBUILD_BUILD_USER=aryan
-export KBUILD_BUILD_HOST=celeste
-export PATH="/home/celeste/15/prebuilts/clang/host/linux-x86/clang-r522817/bin/:$PATH"
+export SUBARCH=arm64
+export KBUILD_BUILD_USER=Builder
+export KBUILD_BUILD_HOST=DenomSly
+export PATH="$(pwd)/toolchain/bin/:$PATH"
+export KBUILD_COMPILER_STRING="$(pwd)/toolchain/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
 
 if [[ $1 = "-c" || $1 = "--clean" ]]; then
 	rm -rf out
 	echo "Cleaned output folder"
 fi
 
-echo -e "\nStarting compilation for $DEVICE...\n"
-make O=out ARCH=arm64 ${DEVICE}_defconfig
-make -j$(nproc) \
+make O=out ARCH=arm64 sweet_defconfig
+make -j$(nproc --all) \
     O=out \
     ARCH=arm64 \
+    AR=llvm-ar \
+    NM=llvm-nm \
+	LD=ld.lld \
+    OBJCOPY=llvm-objcopy \
+    OBJDUMP=llvm-objdump \
+    STRIP=llvm-strip \
     LLVM=1 \
     LLVM_IAS=1 \
+    CC=clang \
     CROSS_COMPILE=aarch64-linux-gnu- \
-    CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-
+    CROSS_COMPILE_ARM32=arm-linux-gnueabi- 2>&1 | tee log-build.txt
+    
 kernel="out/arch/arm64/boot/Image.gz"
 dtbo="out/arch/arm64/boot/dtbo.img"
 dtb="out/arch/arm64/boot/dtb.img"
@@ -60,8 +60,8 @@ else
 fi
 
 # Modify anykernel.sh to replace device names
-sed -i "s/device\.name1=.*/device.name1=${DEVICE}/" AnyKernel3/anykernel.sh
-sed -i "s/device\.name2=.*/device.name2=${DEVICE}in/" AnyKernel3/anykernel.sh
+sed -i "s/device\.name1=.*/device.name1=sweet/" AnyKernel3/anykernel.sh
+sed -i "s/device\.name2=.*/device.name2=sweetin/" AnyKernel3/anykernel.sh
 
 cp $kernel AnyKernel3
 cp $dtbo AnyKernel3
@@ -78,4 +78,5 @@ if test -z "$(git rev-parse --show-cdup 2>/dev/null)" &&
 	HASH="$(echo $head | cut -c1-8)"
 fi
 
-telegram -f $ZIPNAME -M "Completed in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) ! Latest commit: $HASH"
+
+
